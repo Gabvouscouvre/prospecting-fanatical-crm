@@ -237,6 +237,82 @@ function DealerPanel({ dealer, me, onClose, onLogCall, onSaveInfo, onDelete }) {
   );
 }
 
+/* ---------- Personal call history panel ---------- */
+function CallHistoryPanel({ dealers, me, onClose, onOpenDealer }) {
+  const entries = useMemo(() => {
+    const out = [];
+    for (const d of dealers) {
+      if (!d.history) continue;
+      for (const h of d.history) {
+        if (h.by === me) out.push({ ...h, dealer: d });
+      }
+    }
+    return out
+      .filter((e) => e.date)
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, 150);
+  }, [dealers, me]);
+
+  const groups = useMemo(() => {
+    const map = new Map();
+    for (const e of entries) {
+      const label = fmtDate(e.date);
+      if (!map.has(label)) map.set(label, []);
+      map.get(label).push(e);
+    }
+    return [...map.entries()];
+  }, [entries]);
+
+  return (
+    <div className="panel-overlay">
+      <div className="panel" onClick={(e) => e.stopPropagation()}>
+        <div className="panel-head">
+          <div>
+            <div className="panel-eyebrow">{me}</div>
+            <h2>Mes appels récents</h2>
+          </div>
+          <button className="icon-btn" onClick={onClose}><X size={18} /></button>
+        </div>
+
+        {entries.length === 0 && (
+          <div className="empty-hint">
+            Aucun appel loggé sous ton identité pour l'instant. Les appels que tu logues à partir de maintenant apparaîtront ici.
+          </div>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 18, paddingTop: 10 }}>
+          {groups.map(([dateLabel, items]) => (
+            <div key={dateLabel} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div className="panel-eyebrow" style={{ marginBottom: 2 }}>{dateLabel}</div>
+              {items.map((e, i) => {
+                const eng = normEngagement(e.engagement);
+                const call = normCall(e.statut_appel);
+                return (
+                  <button
+                    key={i}
+                    className="dealer-row"
+                    style={{ padding: "10px 12px" }}
+                    onClick={() => onOpenDealer(e.dealer)}
+                  >
+                    <AppleIcon color={ENGAGEMENT_META[eng].color} size={15} />
+                    <div className="dealer-main">
+                      <div className="dealer-name" style={{ fontSize: 14 }}>{e.dealer.concession}</div>
+                      {e.note && <div style={{ fontSize: 12, color: "var(--text-dim)" }}>{e.note}</div>}
+                    </div>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: CALL_META[call].color, flexShrink: 0 }}>
+                      {CALL_META[call].label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------- Add dealer modal ---------- */
 function AddDealerModal({ onClose, onAdd, me }) {
   const [form, setForm] = useState({ concession: "", contact: "", telephone: "", email: "", responsable: "" });
@@ -285,6 +361,7 @@ export default function Dashboard() {
   const [callFilter, setCallFilter] = useState("tous");
   const [selected, setSelected] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [toast, setToast] = useState("");
 
   const me = user?.user_metadata?.display_name || user?.email || "";
@@ -442,6 +519,7 @@ export default function Dashboard() {
         </div>
         <div className="header-actions">
           <span className="who-pill"><User size={13} /> {me}</span>
+          <button className="icon-btn" onClick={() => setShowHistory(true)} title="Mes appels récents"><Clock size={16} /></button>
           <button className="icon-btn" onClick={exportCSV} title="Exporter en CSV"><Download size={17} /></button>
           <button className="icon-btn" onClick={logout} title="Se déconnecter"><LogOut size={16} /></button>
           <button className="btn-primary" style={{ width: "auto", marginTop: 0, padding: "9px 14px" }} onClick={() => setShowAdd(true)}><Plus size={15} /> Dealer</button>
@@ -529,6 +607,14 @@ export default function Dashboard() {
         <DealerPanel dealer={selected} me={me} onClose={() => setSelected(null)} onLogCall={logCall} onSaveInfo={saveInfo} onDelete={deleteDealer} />
       )}
       {showAdd && <AddDealerModal onClose={() => setShowAdd(false)} onAdd={addDealer} me={me} />}
+      {showHistory && (
+        <CallHistoryPanel
+          dealers={dealers}
+          me={me}
+          onClose={() => setShowHistory(false)}
+          onOpenDealer={(d) => { setShowHistory(false); setSelected(d); }}
+        />
+      )}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
