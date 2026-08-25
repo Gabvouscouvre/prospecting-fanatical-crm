@@ -113,11 +113,18 @@ function DealerPanel({ dealer, me, onClose, onLogCall, onSaveInfo, onDelete }) {
       ? `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, "0")}-${String(nextDate.getDate()).padStart(2, "0")}`
       : null;
     await onLogCall(dealer, {
+      // Champs "appel"
       statut_appel: call.statut_appel,
       engagement: call.engagement,
       note: call.note,
       date_dernier_contact: todayISO(),
       date_prochain_suivi: nextISO,
+      // Champs "infos" embarqués au cas où l'onglet Infos n'a pas été sauvegardé séparément
+      concession: form.concession,
+      contact: form.contact,
+      telephone: form.telephone,
+      email: form.email,
+      responsable: form.responsable,
     });
     setBusy(false);
   }
@@ -416,24 +423,31 @@ export default function Dashboard() {
   }
 
   async function saveInfo(id, form) {
-    const { error } = await supabase.from("dealers").update({
+    const patch = {
       concession: form.concession, contact: form.contact, telephone: form.telephone,
       email: form.email, responsable: form.responsable,
-    }).eq("id", id);
-    if (!error) { setToast("Infos sauvegardées"); setSelected(null); }
+    };
+    const { error } = await supabase.from("dealers").update(patch).eq("id", id);
+    if (!error) {
+      setToast("Infos sauvegardées");
+      setSelected((prev) => (prev && prev.id === id ? { ...prev, ...patch } : prev));
+      // La liste se rafraîchit automatiquement via l'abonnement temps réel — pas besoin de la toucher ici.
+    }
   }
 
   async function logCall(dealer, payload) {
     const hist = dealer.history && dealer.history.length ? [...dealer.history] : dealer.note ? [{ date: dealer.date_dernier_contact || "", note: dealer.note }] : [];
     hist.push({ date: payload.date_dernier_contact, note: payload.note || "", by: me, statut_appel: payload.statut_appel, engagement: payload.engagement });
     const wasUnassigned = !dealer.responsable;
+    // payload.responsable vient de l'onglet Infos — s'il n'a pas été touché, il vaut déjà dealer.responsable.
+    const resolvedResponsable = payload.responsable || (wasUnassigned ? me : dealer.responsable);
     const { error } = await supabase.from("dealers").update({
       ...payload,
-      responsable: wasUnassigned ? me : dealer.responsable,
+      responsable: resolvedResponsable,
       history: hist,
     }).eq("id", dealer.id);
     if (!error) {
-      setToast(wasUnassigned ? `Appel enregistré · attribué à ${me}` : "Appel enregistré");
+      setToast(wasUnassigned && resolvedResponsable === me ? `Appel enregistré · attribué à ${me}` : "Appel enregistré");
       setSelected(null);
     }
   }
