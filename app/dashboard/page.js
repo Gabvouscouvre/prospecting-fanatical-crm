@@ -57,6 +57,17 @@ function csvEscape(v) {
 function normName(s) {
   return (s || "").toString().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
+// Recherche "intelligente" : ignore accents/tirets/points, et traite St/Ste/Saint/Sainte
+// comme équivalents (peu importe lequel est tapé ou lequel est dans la base).
+function normSearch(s) {
+  let n = normName(s);
+  const SAINT_WORDS = new Set(["st", "ste", "saint", "sainte"]);
+  n = n
+    .split(" ")
+    .map((word) => (SAINT_WORDS.has(word) ? "st" : word))
+    .join(" ");
+  return n;
+}
 
 function AppleIcon({ color = "var(--text-dim)", size = 15 }) {
   return (
@@ -475,10 +486,10 @@ export default function Dashboard() {
 
   const filtered = useMemo(() => {
     if (!dealers) return [];
-    const q = search.trim().toLowerCase();
+    const q = normSearch(search);
     return dealers.filter((d) => {
       if (q) {
-        const hay = `${d.concession} ${d.contact || ""} ${d.telephone || ""} ${d.email || ""}`.toLowerCase();
+        const hay = normSearch(`${d.concession} ${d.contact || ""} ${d.telephone || ""} ${d.email || ""}`);
         if (!hay.includes(q)) return false;
       }
       if (respFilter === "moi" && d.responsable !== me) return false;
