@@ -17,6 +17,7 @@ const ENGAGEMENT_META = {
   "": { label: "Non évaluée", sub: "", color: "var(--text-dim)" },
 };
 const ENGAGEMENT_ORDER = ["V", "J", "D", "B", "R"];
+const TEAM = ["Gab", "PA", "Joe"];
 const CALL_META = {
   R: { label: "Rejoint", color: "var(--green)" },
   PR: { label: "Pas rejoint", color: "var(--yellow)" },
@@ -216,7 +217,12 @@ function DealerPanel({ dealer, me, onClose, onLogCall, onSaveInfo, onDelete }) {
               </div>
             ))}
             <label className="field-label">Responsable</label>
-            <input className="input" placeholder="Nom du responsable" value={form.responsable || ""} onChange={(e) => setForm((f) => ({ ...f, responsable: e.target.value }))} />
+            <div className="seg">
+              {TEAM.map((name) => (
+                <button key={name} className={form.responsable === name ? "seg-active" : ""} onClick={() => setForm((f) => ({ ...f, responsable: name }))}>{name}</button>
+              ))}
+              <button className={!form.responsable ? "seg-active" : ""} onClick={() => setForm((f) => ({ ...f, responsable: "" }))}>Non assigné</button>
+            </div>
             <button className="btn-primary" onClick={submitInfo} disabled={busy}>
               {busy ? <Loader2 className="spin-icon" size={15} /> : <Save size={15} />} Sauvegarder les infos
             </button>
@@ -357,8 +363,10 @@ function AddDealerModal({ onClose, onAdd, me }) {
           <input className="input" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
           <label className="field-label">Responsable</label>
           <div className="seg">
-            <button className={form.responsable === me ? "seg-active" : ""} onClick={() => setForm((f) => ({ ...f, responsable: me }))}>Moi</button>
-            <button className={form.responsable === "" ? "seg-active" : ""} onClick={() => setForm((f) => ({ ...f, responsable: "" }))}>Non assigné</button>
+            {TEAM.map((name) => (
+              <button key={name} className={form.responsable === name ? "seg-active" : ""} onClick={() => setForm((f) => ({ ...f, responsable: name }))}>{name}</button>
+            ))}
+            <button className={!form.responsable ? "seg-active" : ""} onClick={() => setForm((f) => ({ ...f, responsable: "" }))}>Non assigné</button>
           </div>
           <button className="btn-primary" onClick={submit} disabled={busy}>{busy ? <Loader2 className="spin-icon" size={15} /> : <Plus size={15} />} Ajouter le dealer</button>
         </div>
@@ -373,10 +381,10 @@ export default function Dashboard() {
   const [user, setUser] = useState(null);
   const [dealers, setDealers] = useState(null);
   const [search, setSearch] = useState("");
-  const [respFilter, setRespFilter] = useState("tous");
-  const [urgencyFilter, setUrgencyFilter] = useState("tous");
-  const [engFilter, setEngFilter] = useState("tous");
-  const [callFilter, setCallFilter] = useState("tous");
+  const [respFilter, setRespFilter] = useState(() => (typeof window !== "undefined" && localStorage.getItem("filter-resp")) || "tous");
+  const [urgencyFilter, setUrgencyFilter] = useState(() => (typeof window !== "undefined" && localStorage.getItem("filter-urgency")) || "tous");
+  const [engFilter, setEngFilter] = useState(() => (typeof window !== "undefined" && localStorage.getItem("filter-eng")) || "tous");
+  const [callFilter, setCallFilter] = useState(() => (typeof window !== "undefined" && localStorage.getItem("filter-call")) || "tous");
   const [selected, setSelected] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -416,21 +424,30 @@ export default function Dashboard() {
 
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(""), 2600); return () => clearTimeout(t); }, [toast]);
 
+  useEffect(() => { localStorage.setItem("filter-resp", respFilter); }, [respFilter]);
+  useEffect(() => { localStorage.setItem("filter-urgency", urgencyFilter); }, [urgencyFilter]);
+  useEffect(() => { localStorage.setItem("filter-eng", engFilter); }, [engFilter]);
+  useEffect(() => { localStorage.setItem("filter-call", callFilter); }, [callFilter]);
+
   async function logout() {
     await supabase.auth.signOut();
     router.replace("/login");
   }
 
   async function addDealer(form) {
-    const { error } = await supabase.from("dealers").insert({
+    const newRow = {
       concession: form.concession.trim(),
       contact: form.contact.trim(),
       telephone: form.telephone.trim(),
       email: form.email.trim(),
       responsable: form.responsable || "",
       history: [],
-    });
-    if (!error) setToast(`${form.concession} ajouté`);
+    };
+    const { data, error } = await supabase.from("dealers").insert(newRow).select().single();
+    if (!error && data) {
+      setToast(`${form.concession} ajouté`);
+      setDealers((prev) => [data, ...prev]);
+    }
   }
 
   async function saveInfo(id, form) {
@@ -442,7 +459,7 @@ export default function Dashboard() {
     if (!error) {
       setToast("Infos sauvegardées");
       setSelected((prev) => (prev && prev.id === id ? { ...prev, ...patch } : prev));
-      // La liste se rafraîchit automatiquement via l'abonnement temps réel — pas besoin de la toucher ici.
+      setDealers((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
     }
   }
 
@@ -452,21 +469,23 @@ export default function Dashboard() {
     const wasUnassigned = !dealer.responsable;
     // payload.responsable vient de l'onglet Infos — s'il n'a pas été touché, il vaut déjà dealer.responsable.
     const resolvedResponsable = payload.responsable || (wasUnassigned ? me : dealer.responsable);
-    const { error } = await supabase.from("dealers").update({
-      ...payload,
-      responsable: resolvedResponsable,
-      history: hist,
-    }).eq("id", dealer.id);
+    const fullPatch = { ...payload, responsable: resolvedResponsable, history: hist };
+    const { error } = await supabase.from("dealers").update(fullPatch).eq("id", dealer.id);
     if (!error) {
       setToast(wasUnassigned && resolvedResponsable === me ? `Appel enregistré · attribué à ${me}` : "Appel enregistré");
       setSelected(null);
+      setDealers((prev) => prev.map((d) => (d.id === dealer.id ? { ...d, ...fullPatch } : d)));
     }
   }
 
   async function deleteDealer(id) {
     const target = dealers.find((d) => d.id === id);
     const { error } = await supabase.from("dealers").delete().eq("id", id);
-    if (!error) { setToast(`${target ? target.concession : "Dealer"} supprimé`); setSelected(null); }
+    if (!error) {
+      setToast(`${target ? target.concession : "Dealer"} supprimé`);
+      setSelected(null);
+      setDealers((prev) => prev.filter((d) => d.id !== id));
+    }
   }
 
   function exportCSV() {
@@ -478,11 +497,6 @@ export default function Dashboard() {
     a.href = url; a.download = `prospection-dealers-${todayISO()}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
-
-  const knownRespos = useMemo(() => {
-    if (!dealers) return [];
-    return [...new Set(dealers.map((d) => d.responsable).filter(Boolean))];
-  }, [dealers]);
 
   const filtered = useMemo(() => {
     if (!dealers) return [];
@@ -540,7 +554,7 @@ export default function Dashboard() {
       <div className="header-top">
         <div>
           <div className="eyebrow">Prospecting Fanatical</div>
-          <h1>Rats d'Égouts</h1>
+          <h1>Prime Cartel</h1>
         </div>
         <div className="header-actions">
           <span className="who-pill"><User size={13} /> {me}</span>
@@ -568,7 +582,7 @@ export default function Dashboard() {
           <span className="chip-row-label">Qui</span>
           <Chip active={respFilter === "tous"} onClick={() => setRespFilter("tous")}>Tous</Chip>
           <Chip active={respFilter === "moi"} onClick={() => setRespFilter("moi")}>Mes dossiers</Chip>
-          {knownRespos.filter((r) => r !== me).map((r) => (
+          {TEAM.filter((r) => r !== me).map((r) => (
             <Chip key={r} active={respFilter === r} onClick={() => setRespFilter(r)}>{r}</Chip>
           ))}
           <Chip active={respFilter === "none"} onClick={() => setRespFilter("none")}>Non assigné</Chip>
