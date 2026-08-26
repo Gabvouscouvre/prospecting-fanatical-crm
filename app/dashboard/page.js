@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import {
   Search, Plus, X, Phone, Clock, User, Mail, LogOut, Download,
-  AlertTriangle, TrendingUp, Check, Save, Loader2, Trash2,
+  AlertTriangle, TrendingUp, Check, Save, Loader2, Trash2, Edit2,
 } from "lucide-react";
 
 /* ---------- Pomme system ---------- */
@@ -106,10 +106,13 @@ function StatCard({ label, value, accent, icon: Icon }) {
 }
 
 /* ---------- Dealer detail panel ---------- */
-function DealerPanel({ dealer, me, onClose, onLogCall, onSaveInfo, onDelete }) {
+function DealerPanel({ dealer, me, onClose, onLogCall, onSaveInfo, onDelete, onEditNote }) {
   const [tab, setTab] = useState("call");
   const [form, setForm] = useState({ ...dealer });
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [editingIdx, setEditingIdx] = useState(null); // index dans le tableau original (non inversé)
+  const [editingText, setEditingText] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [call, setCall] = useState({ statut_appel: dealer.statut_appel || "R", engagement: dealer.engagement || "", note: "", nextDays: 7 });
 
@@ -247,12 +250,62 @@ function DealerPanel({ dealer, me, onClose, onLogCall, onSaveInfo, onDelete }) {
           <div className="panel-body">
             {history.length === 0 && <div className="empty-hint">Aucun historique pour l'instant.</div>}
             <div className="hist-list">
-              {[...history].reverse().map((h, i) => (
-                <div key={i} className="hist-item">
-                  <div className="hist-date">{fmtDate(h.date)}{h.by ? ` · ${h.by}` : ""}</div>
-                  <div className="hist-note">{h.note || "(pas de note)"}</div>
-                </div>
-              ))}
+              {history.map((h, originalIdx) => originalIdx).reverse().map((originalIdx) => {
+                const h = history[originalIdx];
+                const isEditing = editingIdx === originalIdx;
+                return (
+                  <div key={originalIdx} className="hist-item">
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <div className="hist-date">{fmtDate(h.date)}{h.by ? ` · ${h.by}` : ""}{h.edited ? " · modifiée" : ""}</div>
+                      {!isEditing && (
+                        <button
+                          className="icon-btn"
+                          style={{ width: 26, height: 26, flexShrink: 0 }}
+                          title="Modifier cette note"
+                          onClick={() => { setEditingIdx(originalIdx); setEditingText(h.note || ""); }}
+                        >
+                          <Edit2 size={12} />
+                        </button>
+                      )}
+                    </div>
+                    {isEditing ? (
+                      <div style={{ marginTop: 6 }}>
+                        <textarea
+                          className="textarea"
+                          rows={3}
+                          autoFocus
+                          value={editingText}
+                          onChange={(e) => setEditingText(e.target.value)}
+                        />
+                        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                          <button
+                            className="btn-cancel"
+                            style={{ flex: 1 }}
+                            onClick={() => setEditingIdx(null)}
+                          >
+                            Annuler
+                          </button>
+                          <button
+                            className="btn-primary"
+                            style={{ flex: 1, marginTop: 0, padding: "8px" }}
+                            disabled={editBusy}
+                            onClick={async () => {
+                              setEditBusy(true);
+                              await onEditNote(dealer.id, originalIdx, editingText);
+                              setEditBusy(false);
+                              setEditingIdx(null);
+                            }}
+                          >
+                            {editBusy ? <Loader2 className="spin-icon" size={14} /> : <Check size={14} />} Sauvegarder
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="hist-note">{h.note || "(pas de note)"}</div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -488,6 +541,21 @@ export default function Dashboard() {
     }
   }
 
+  async function editHistoryNote(dealerId, historyIdx, newNote) {
+    const dealer = dealers.find((d) => d.id === dealerId);
+    if (!dealer || !dealer.history) return;
+    const newHistory = dealer.history.map((h, i) => (i === historyIdx ? { ...h, note: newNote, edited: true } : h));
+    // Si c'est la dernière entrée, on garde aussi le champ "note" principal du dealer synchronisé.
+    const isLast = historyIdx === dealer.history.length - 1;
+    const patch = { history: newHistory, ...(isLast ? { note: newNote } : {}) };
+    const { error } = await supabase.from("dealers").update(patch).eq("id", dealerId);
+    if (!error) {
+      setToast("Note modifiée");
+      setDealers((prev) => prev.map((d) => (d.id === dealerId ? { ...d, ...patch } : d)));
+      setSelected((prev) => (prev && prev.id === dealerId ? { ...prev, ...patch } : prev));
+    }
+  }
+
   function exportCSV() {
     const cols = ["responsable", "concession", "contact", "telephone", "email", "statut_appel", "engagement", "date_dernier_contact", "date_prochain_suivi", "note"];
     const rows = [cols.join(",")].concat(dealers.map((d) => cols.map((c) => csvEscape(d[c])).join(",")));
@@ -643,7 +711,7 @@ export default function Dashboard() {
       </div>
 
       {selected && (
-        <DealerPanel dealer={selected} me={me} onClose={() => setSelected(null)} onLogCall={logCall} onSaveInfo={saveInfo} onDelete={deleteDealer} />
+        <DealerPanel dealer={selected} me={me} onClose={() => setSelected(null)} onLogCall={logCall} onSaveInfo={saveInfo} onDelete={deleteDealer} onEditNote={editHistoryNote} />
       )}
       {showAdd && <AddDealerModal onClose={() => setShowAdd(false)} onAdd={addDealer} me={me} />}
       {showHistory && (
