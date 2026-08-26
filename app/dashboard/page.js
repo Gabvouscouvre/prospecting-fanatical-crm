@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import {
   Search, Plus, X, Phone, Clock, User, Mail, LogOut, Download,
-  AlertTriangle, TrendingUp, Check, Save, Loader2, Trash2, Edit2,
+  AlertTriangle, TrendingUp, Check, Save, Loader2, Trash2, Edit2, Wallet,
 } from "lucide-react";
 
 /* ---------- Pomme system ---------- */
@@ -442,6 +442,7 @@ export default function Dashboard() {
   const [showAdd, setShowAdd] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [toast, setToast] = useState("");
+  const [pendingLeadsCount, setPendingLeadsCount] = useState(0);
 
   const me = user?.user_metadata?.display_name || user?.email || "";
 
@@ -463,6 +464,13 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => { loadDealers(); }, [loadDealers]);
+
+  useEffect(() => {
+    if (!user) return;
+    supabase.from("paid_leads").select("id", { count: "exact", head: true }).neq("status", "soumis").then(({ count }) => {
+      if (typeof count === "number") setPendingLeadsCount(count);
+    });
+  }, [user]);
 
   // Realtime sync — everyone sees changes instantly, no refresh button needed
   useEffect(() => {
@@ -639,6 +647,28 @@ export default function Dashboard() {
         <StatCard label="D'ici 3 jours" value={stats.bientot} accent="var(--yellow)" icon={Clock} />
         <StatCard label="Contactés (7j)" value={stats.cetteSemaine} accent="var(--accent)" icon={Phone} />
       </div>
+
+      <button
+        onClick={() => router.push("/leads")}
+        style={{
+          width: "100%", marginTop: 14, background: "#3c2e12", border: "2px solid var(--accent)",
+          borderRadius: 12, padding: "12px 16px", display: "flex", alignItems: "center",
+          justifyContent: "space-between", cursor: "pointer", textAlign: "left",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 38, height: 38, borderRadius: 10, background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <Wallet size={19} color="#1a1206" />
+          </div>
+          <div>
+            <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 15, fontWeight: 700, color: "var(--accent)" }}>Leads payants</div>
+            <div style={{ fontSize: 11.5, color: "#e8c547" }}>
+              {pendingLeadsCount > 0 ? `${pendingLeadsCount} en attente de soumission` : "Aucun lead en attente"}
+            </div>
+          </div>
+        </div>
+        <span style={{ color: "var(--accent)", fontSize: 16 }}>→</span>
+      </button>
 
       <div className="filters">
         <div className="search-box">
