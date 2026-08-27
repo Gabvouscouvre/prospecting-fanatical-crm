@@ -17,7 +17,7 @@ const ENGAGEMENT_META = {
   "": { label: "Non évaluée", sub: "", color: "var(--text-dim)" },
 };
 const ENGAGEMENT_ORDER = ["V", "J", "D", "B", "R"];
-const TEAM = ["Gab", "PA", "Joe", "Charles"];
+const TEAM = ["Gab", "PA", "Joe", "Charles", "Antho"];
 const CALL_META = {
   R: { label: "Rejoint", color: "var(--green)" },
   PR: { label: "Pas rejoint", color: "var(--yellow)" },
