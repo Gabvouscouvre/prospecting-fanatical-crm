@@ -17,7 +17,7 @@ const ENGAGEMENT_META = {
   "": { label: "Non évaluée", sub: "", color: "var(--text-dim)" },
 };
 const ENGAGEMENT_ORDER = ["V", "J", "D", "B", "R"];
-const TEAM = ["Gab", "PA", "Joe", "Charles", "Antho", "Shawn"];
+const TEAM = ["Gab", "PA", "Joe", "Charles", "Bradley"];
 const CALL_META = {
   R: { label: "Rejoint", color: "var(--green)" },
   PR: { label: "Pas rejoint", color: "var(--yellow)" },
@@ -68,6 +68,27 @@ function normSearch(s) {
     .map((word) => (SAINT_WORDS.has(word) ? "st" : word))
     .join(" ");
   return n;
+}
+
+/* ---------- Jeton "accès complet" ----------
+   Sans le jeton (profiles.acces_complet = false), l'utilisateur ne voit que
+   SES propres notes et SES propres pommes. Ce qui a été noté avant lui par
+   les autres est caché. On garde toujours les données complètes en mémoire
+   pour les sauvegardes (sinon on effacerait les notes des autres). */
+function viewForUser(dealer, me, accesComplet) {
+  if (accesComplet) return dealer;
+  const full = dealer.history || [];
+  const mine = full
+    .map((h, i) => ({ ...h, _idx: i }))
+    .filter((h) => h.by && h.by === me);
+  const last = mine[mine.length - 1];
+  return {
+    ...dealer,
+    history: mine,
+    engagement: last ? last.engagement || "" : "",
+    statut_appel: last ? last.statut_appel || "" : "",
+    note: last ? last.note || "" : "",
+  };
 }
 
 function AppleIcon({ color = "var(--text-dim)", size = 15 }) {
@@ -291,7 +312,7 @@ function DealerPanel({ dealer, me, onClose, onLogCall, onSaveInfo, onDelete, onE
                             disabled={editBusy}
                             onClick={async () => {
                               setEditBusy(true);
-                              await onEditNote(dealer.id, originalIdx, editingText);
+                              await onEditNote(dealer.id, h._idx ?? originalIdx, editingText);
                               setEditBusy(false);
                               setEditingIdx(null);
                             }}
@@ -444,7 +465,16 @@ export default function Dashboard() {
   const [toast, setToast] = useState("");
   const [pendingLeadsCount, setPendingLeadsCount] = useState(0);
 
-  const me = user?.user_metadata?.display_name || user?.email || "";
+  const [profile, setProfile] = useState(undefined); // undefined = en chargement, null = aucun profil
+  const accesComplet = !!profile?.acces_complet;
+  const me = profile?.display_name || user?.user_metadata?.display_name || user?.email || "";
+
+  // Charge le profil (jeton d'accès). Pas de profil ou erreur = accès limité par défaut.
+  useEffect(() => {
+    if (!user) return;
+    supabase.from("profiles").select("display_name, acces_complet").eq("id", user.id).maybeSingle()
+      .then(({ data, error }) => setProfile(error ? null : data || null));
+  }, [user]);
 
   // Auth guard + load
   useEffect(() => {
@@ -524,8 +554,10 @@ export default function Dashboard() {
     }
   }
 
-  async function logCall(dealer, payload) {
-    const hist = dealer.history && dealer.history.length ? [...dealer.history] : dealer.note ? [{ date: dealer.date_dernier_contact || "", note: dealer.note }] : [];
+  async function logCall(viewedDealer, payload) {
+    // Toujours repartir de la version complète (avec les notes des autres) pour ne rien effacer.
+    const dealer = dealers.find((d) => d.id === viewedDealer.id) || viewedDealer;
+    const hist =dealer.history && dealer.history.length ? [...dealer.history] : dealer.note ? [{ date: dealer.date_dernier_contact || "", note: dealer.note }] : [];
     hist.push({ date: payload.date_dernier_contact, note: payload.note || "", by: me, statut_appel: payload.statut_appel, engagement: payload.engagement });
     const wasUnassigned = !dealer.responsable;
     // payload.responsable vient de l'onglet Infos — s'il n'a pas été touché, il vaut déjà dealer.responsable.
@@ -566,7 +598,7 @@ export default function Dashboard() {
 
   function exportCSV() {
     const cols = ["responsable", "concession", "contact", "telephone", "email", "statut_appel", "engagement", "date_dernier_contact", "date_prochain_suivi", "note"];
-    const rows = [cols.join(",")].concat(dealers.map((d) => cols.map((c) => csvEscape(d[c])).join(",")));
+    const rows = [cols.join(",")].concat(visibleDealers.map((d) => cols.map((c) => csvEscape(d[c])).join(",")));
     const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -574,10 +606,24 @@ export default function Dashboard() {
     URL.revokeObjectURL(url);
   }
 
+  // Ce que l'utilisateur a le droit de voir (tout, ou seulement ses propres notes/pommes)
+  const visibleDealers = useMemo(
+    () => (dealers ? dealers.map((d) => viewForUser(d, me, accesComplet)) : []),
+    [dealers, me, accesComplet]
+  );
+  const selectedView = useMemo(
+    () => (selected ? viewForUser(selected, me, accesComplet) : null),
+    [selected, me, accesComplet]
+  );
+  // Ouvre toujours la version complète en mémoire; l'affichage passe par selectedView.
+  function openDealer(d) {
+    setSelected((dealers && dealers.find((x) => x.id === d.id)) || d);
+  }
+
   const filtered = useMemo(() => {
     if (!dealers) return [];
     const q = normSearch(search);
-    return dealers.filter((d) => {
+    return visibleDealers.filter((d) => {
       if (q) {
         const hay = normSearch(`${d.concession} ${d.contact || ""} ${d.telephone || ""} ${d.email || ""}`);
         if (!hay.includes(q)) return false;
@@ -596,7 +642,7 @@ export default function Dashboard() {
       }
       return true;
     });
-  }, [dealers, search, respFilter, urgencyFilter, engFilter, callFilter, me]);
+  }, [visibleDealers, dealers, search, respFilter, urgencyFilter, engFilter, callFilter, me]);
 
   const sorted = useMemo(() => {
     const rank = { retard: 0, bientot: 1, "a-jour": 2, "sans-date": 3 };
@@ -620,7 +666,7 @@ export default function Dashboard() {
     };
   }, [dealers, respFilter, me]);
 
-  if (!user || !dealers) {
+  if (!user || !dealers || profile === undefined) {
     return <div className="auth-shell"><Loader2 className="spin-icon" size={22} /></div>;
   }
 
@@ -718,7 +764,7 @@ export default function Dashboard() {
           const urg = urgencyOf(d);
           const eng = normEngagement(d.engagement);
           return (
-            <button key={d.id} className="dealer-row" onClick={() => setSelected(d)}>
+            <button key={d.id} className="dealer-row" onClick={() => openDealer(d)}>
               <span className="urg-bar" style={{ background: ENGAGEMENT_META[eng].color }} />
               <div className="dealer-main">
                 <div className="dealer-line1">
@@ -741,7 +787,7 @@ export default function Dashboard() {
       </div>
 
       {selected && (
-        <DealerPanel dealer={selected} me={me} onClose={() => setSelected(null)} onLogCall={logCall} onSaveInfo={saveInfo} onDelete={deleteDealer} onEditNote={editHistoryNote} />
+        <DealerPanel dealer={selectedView} me={me} onClose={() => setSelected(null)} onLogCall={logCall} onSaveInfo={saveInfo} onDelete={deleteDealer} onEditNote={editHistoryNote} />
       )}
       {showAdd && <AddDealerModal onClose={() => setShowAdd(false)} onAdd={addDealer} me={me} />}
       {showHistory && (
@@ -749,7 +795,7 @@ export default function Dashboard() {
           dealers={dealers}
           me={me}
           onClose={() => setShowHistory(false)}
-          onOpenDealer={(d) => { setShowHistory(false); setSelected(d); }}
+          onOpenDealer={(d) => { setShowHistory(false); openDealer(d); }}
         />
       )}
       {toast && <div className="toast">{toast}</div>}
