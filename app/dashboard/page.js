@@ -29,7 +29,9 @@ function normCall(v) { const u = (v || "").trim().toUpperCase(); return ["R", "P
 function todayISO() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
 function parseDate(str) {
   if (!str) return null;
-  const d = new Date(str);
+  // "AAAA-MM-JJ" = date locale (sinon le navigateur la lit en UTC et recule d'un jour au Québec)
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(str));
+  const d = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(str);
   return isNaN(d.getTime()) ? null : d;
 }
 function fmtDate(str) {
@@ -43,6 +45,13 @@ function daysUntil(str) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   d.setHours(0, 0, 0, 0);
   return Math.round((d - today) / 86400000);
+}
+function fmtAgo(str) {
+  const du = daysUntil(str);
+  if (du === null) return "Jamais appelé";
+  if (du >= 0) return "Dernier appel : aujourd'hui";
+  if (du === -1) return "Dernier appel : hier";
+  return `Dernier appel : il y a ${-du} jours`;
 }
 function urgencyOf(dealer) {
   const du = daysUntil(dealer.date_prochain_suivi);
@@ -82,10 +91,23 @@ function viewForUser(dealer, me, accesComplet) {
     .map((h, i) => ({ ...h, _idx: i }))
     .filter((h) => h.by && h.by === me);
   const last = mine[mine.length - 1];
+  // Pomme dorée = dealer "au complet" de quelqu'un : on montre la pomme ET le responsable.
+  const isGolden = normEngagement(dealer.engagement) === "D";
+  // Sinon on cache l'assignation (sauf si c'est la sienne), pour qu'il ne se gêne pas d'appeler.
+  const showResp = isGolden || dealer.responsable === me;
   return {
     ...dealer,
     history: mine,
-    engagement: last ? last.engagement || "" : "",
+    _mine: mine.length > 0,
+    _limited: true,
+    _myLast: last ? last.date || null : null,
+    // Pomme dorée de quelqu'un d'autre : il ne peut pas la changer
+    _goldenLocked: isGolden && dealer.responsable !== me,
+    // Il ne voit que SES rappels, jamais les dates de suivi des autres
+    date_prochain_suivi: last ? last.next || null : null,
+    _respHidden: !showResp && !!dealer.responsable,
+    responsable: showResp ? dealer.responsable : "",
+    engagement: isGolden ? "D" : last ? last.engagement || "" : "",
     statut_appel: last ? last.statut_appel || "" : "",
     note: last ? last.note || "" : "",
   };
@@ -184,6 +206,7 @@ function DealerPanel({ dealer, me, onClose, onLogCall, onSaveInfo, onDelete, onE
 
         <div className="panel-meta">
           <AppleBadge code={normEngagement(dealer.engagement)} showSub />
+          {dealer._limited && <div className="meta-row"><Clock size={14} />{fmtAgo(dealer.date_dernier_contact)}</div>}
           {dealer.contact && <div className="meta-row"><User size={14} />{dealer.contact}</div>}
           {dealer.telephone && <div className="meta-row"><Phone size={14} /><a href={`tel:${dealer.telephone}`}>{dealer.telephone}</a></div>}
           {dealer.email && <div className="meta-row"><Mail size={14} /><a href={`mailto:${dealer.email}`}>{dealer.email}</a></div>}
@@ -204,6 +227,11 @@ function DealerPanel({ dealer, me, onClose, onLogCall, onSaveInfo, onDelete, onE
               ))}
             </div>
             <label className="field-label">La pomme</label>
+            {dealer._goldenLocked ? (
+              <div className="meta-row" style={{ fontSize: 13, color: "var(--text-dim)" }}>
+                <AppleIcon color={ENGAGEMENT_META.D.color} size={17} /> Pomme dorée de {dealer.responsable} — ne peut pas être changée.
+              </div>
+            ) : (
             <div className="seg" style={{ flexWrap: "wrap" }}>
               {ENGAGEMENT_ORDER.map((k) => (
                 <button key={k} className={`apple-seg-btn ${call.engagement === k ? "seg-active" : ""}`} style={{ flexBasis: "17%", ...(call.engagement === k ? { "--sc": ENGAGEMENT_META[k].color } : {}) }} onClick={() => setCall((c) => ({ ...c, engagement: k }))}>
@@ -211,6 +239,7 @@ function DealerPanel({ dealer, me, onClose, onLogCall, onSaveInfo, onDelete, onE
                 </button>
               ))}
             </div>
+            )}
             <label className="field-label">Note</label>
             <textarea className="textarea" rows={3} placeholder="Ce qui s'est dit, prochaine étape..." value={call.note} onChange={(e) => setCall((c) => ({ ...c, note: e.target.value }))} />
             <label className="field-label">Prochain suivi</label>
@@ -542,9 +571,12 @@ export default function Dashboard() {
   }
 
   async function saveInfo(id, form) {
+    // Sans le jeton, on ne peut pas toucher à une assignation qu'on ne voit pas.
+    const raw = dealers.find((d) => d.id === id);
+    const hiddenResp = raw && viewForUser(raw, me, accesComplet)._respHidden;
     const patch = {
       concession: form.concession, contact: form.contact, telephone: form.telephone,
-      email: form.email, responsable: form.responsable,
+      email: form.email, responsable: hiddenResp ? raw.responsable : form.responsable,
     };
     const { error } = await supabase.from("dealers").update(patch).eq("id", id);
     if (!error) {
@@ -558,11 +590,24 @@ export default function Dashboard() {
     // Toujours repartir de la version complète (avec les notes des autres) pour ne rien effacer.
     const dealer = dealers.find((d) => d.id === viewedDealer.id) || viewedDealer;
     const hist =dealer.history && dealer.history.length ? [...dealer.history] : dealer.note ? [{ date: dealer.date_dernier_contact || "", note: dealer.note }] : [];
-    hist.push({ date: payload.date_dernier_contact, note: payload.note || "", by: me, statut_appel: payload.statut_appel, engagement: payload.engagement });
     const wasUnassigned = !dealer.responsable;
     // payload.responsable vient de l'onglet Infos — s'il n'a pas été touché, il vaut déjà dealer.responsable.
     const resolvedResponsable = payload.responsable || (wasUnassigned ? me : dealer.responsable);
-    const fullPatch = { ...payload, responsable: resolvedResponsable, history: hist };
+    const limited = !accesComplet;
+    // Sans jeton : impossible de changer la pomme dorée de quelqu'un d'autre.
+    const goldenLocked = limited && normEngagement(dealer.engagement) === "D" && dealer.responsable !== me;
+    const engagement = goldenLocked ? "D" : payload.engagement;
+    // Sans jeton, sur le dealer de quelqu'un d'autre : son rappel reste dans SON historique
+    // et n'écrase pas la date de suivi du responsable.
+    const keepOwnerFollowUp = limited && resolvedResponsable !== me;
+    hist.push({ date: payload.date_dernier_contact, note: payload.note || "", by: me, statut_appel: payload.statut_appel, engagement, next: payload.date_prochain_suivi || null });
+    const fullPatch = {
+      ...payload,
+      engagement,
+      ...(keepOwnerFollowUp ? { date_prochain_suivi: dealer.date_prochain_suivi } : {}),
+      responsable: resolvedResponsable,
+      history: hist,
+    };
     const { error } = await supabase.from("dealers").update(fullPatch).eq("id", dealer.id);
     if (!error) {
       setToast(wasUnassigned && resolvedResponsable === me ? `Appel enregistré · attribué à ${me}` : "Appel enregistré");
@@ -628,7 +673,8 @@ export default function Dashboard() {
         const hay = normSearch(`${d.concession} ${d.contact || ""} ${d.telephone || ""} ${d.email || ""}`);
         if (!hay.includes(q)) return false;
       }
-      if (respFilter === "moi" && d.responsable !== me) return false;
+      // "Mes dossiers" = assignés à moi, ou (sans jeton) les dealers que j'ai moi-même appelés
+      if (respFilter === "moi" && d.responsable !== me && !d._mine) return false;
       if (respFilter === "none" && d.responsable) return false;
       if (respFilter !== "tous" && respFilter !== "moi" && respFilter !== "none" && d.responsable !== respFilter) return false;
       if (urgencyFilter !== "tous" && urgencyOf(d) !== urgencyFilter) return false;
@@ -657,14 +703,14 @@ export default function Dashboard() {
 
   const stats = useMemo(() => {
     if (!dealers) return null;
-    const scoped = respFilter === "moi" ? dealers.filter((d) => d.responsable === me) : dealers;
+    const scoped = respFilter === "moi" ? visibleDealers.filter((d) => d.responsable === me || d._mine) : visibleDealers;
     return {
       total: scoped.length,
       retard: scoped.filter((d) => urgencyOf(d) === "retard").length,
       bientot: scoped.filter((d) => urgencyOf(d) === "bientot").length,
-      cetteSemaine: scoped.filter((d) => { const du = daysUntil(d.date_dernier_contact); return du !== null && du <= 0 && du >= -7; }).length,
+      cetteSemaine: scoped.filter((d) => { const du = daysUntil(d._limited ? d._myLast : d.date_dernier_contact); return du !== null && du <= 0 && du >= -7; }).length,
     };
-  }, [dealers, respFilter, me]);
+  }, [dealers, visibleDealers, respFilter, me]);
 
   if (!user || !dealers || profile === undefined) {
     return <div className="auth-shell"><Loader2 className="spin-icon" size={22} /></div>;
@@ -726,7 +772,7 @@ export default function Dashboard() {
           <span className="chip-row-label">Qui</span>
           <Chip active={respFilter === "tous"} onClick={() => setRespFilter("tous")}>Tous</Chip>
           <Chip active={respFilter === "moi"} onClick={() => setRespFilter("moi")}>Mes dossiers</Chip>
-          {TEAM.filter((r) => r !== me).map((r) => (
+          {(accesComplet ? TEAM.filter((r) => r !== me) : []).map((r) => (
             <Chip key={r} active={respFilter === r} onClick={() => setRespFilter(r)}>{r}</Chip>
           ))}
           <Chip active={respFilter === "none"} onClick={() => setRespFilter("none")}>Non assigné</Chip>
@@ -774,6 +820,7 @@ export default function Dashboard() {
                 <div className="dealer-line2">
                   {d.contact && <span>{d.contact}</span>}
                   {d.telephone && <span className="mono">{d.telephone}</span>}
+                  {d._limited && <span>{fmtAgo(d.date_dernier_contact)}</span>}
                 </div>
               </div>
               <div className="dealer-side">
