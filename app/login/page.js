@@ -68,13 +68,9 @@ export default function LoginPage() {
           </form>
         )}
 
-        <div className="auth-switch">
-          {mode === "login" ? (
-            <>Pas encore de compte ? <button onClick={() => { setMode("signup"); setError(""); }}>En créer un</button></>
-          ) : (
-            <>Déjà un compte ? <button onClick={() => { setMode("login"); setError(""); setSignedUpMsg(false); }}>Se connecter</button></>
-          )}
-        </div>
+        <p className="sub" style={{ marginTop: 14, fontSize: 12.5 }}>
+          Pas de compte ? Demande à Gab de t'en créer un.
+        </p>
       </div>
     </div>
   );
